@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-surface-900 text-gray-100 antialiased;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #1c1f2e transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    @apply bg-surface-800 rounded-full;
+  }
+}
+
+/* React Flow overrides */
+.react-flow__renderer {
+  @apply bg-surface-900;
+}
+
+.react-flow__background {
+  @apply bg-surface-900;
+}
+
+.react-flow__edge-path {
+  stroke: #4f6ef7;
+  stroke-width: 2;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #a5b4fc;
+}
+
+.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  border: 2px solid #4f6ef7;
+  background: #13151f;
+}
+
+.react-flow__handle:hover {
+  background: #4f6ef7;
+}
+
+.react-flow__controls {
+  @apply bg-surface-800 border border-white/10 rounded-lg overflow-hidden shadow-xl;
+}
+
+.react-flow__controls-button {
+  @apply bg-surface-800 border-none text-gray-400 hover:text-white hover:bg-surface-900;
+  fill: currentColor;
+}
+
+.react-flow__minimap {
+  @apply bg-surface-800 border border-white/10 rounded-lg overflow-hidden;
+}
+
+.react-flow__panel {
+  @apply text-gray-300;
+}

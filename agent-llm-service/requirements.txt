@@ -1,0 +1,28 @@
+# agent-llm-service/requirements.txt
+
+# ── Web framework ──────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+
+# ── Validation / Settings ──────────────────────────────────────
+pydantic==2.7.1
+pydantic-settings==2.2.1
+
+# ── LangChain core + intégrations ─────────────────────────────
+langchain==0.2.6
+langchain-core==0.2.11
+langchain-community==0.2.6   # OllamaLLM, ChatOllama
+langchain-openai==0.1.14     # ChatOpenAI (fallback cloud)
+
+# ── MLflow Tracking ────────────────────────────────────────────
+mlflow==2.13.0
+
+# ── HTTP client async ──────────────────────────────────────────
+httpx==0.27.0
+
+# ── Utilitaires ────────────────────────────────────────────────
+python-dotenv==1.0.1
+tenacity==8.3.0        # retry sur appels LLM
+
+# ── Observabilité ──────────────────────────────────────────────
+structlog==24.1.0

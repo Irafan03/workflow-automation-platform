@@ -1,0 +1,251 @@
+networks:
+  workflow-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mlflow_data:
+
+services:
+
+  # ─────────────────────────────────────────
+  # PostgreSQL 15 — stockage principal
+  # ─────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: workflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - workflow-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # Redis 7 — message broker asynchrone
+  # ─────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: workflow-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - workflow-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # MLflow — observabilité des agents IA
+  # ─────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.0
+    container_name: workflow-mlflow
+    restart: unless-stopped
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:///mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    volumes:
+      - mlflow_data:/mlflow
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    networks:
+      - workflow-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # Ollama — LLM local (Gemma 2B)
+  # ─────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: workflow-ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    networks:
+      - workflow-net
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  # ─────────────────────────────────────────
+  # API Gateway — REST / Auth / Postgres
+  # ─────────────────────────────────────────
+  api-gateway:
+    build:
+      context: ./api-gateway
+      target: runtime
+    container_name: workflow-api-gateway
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      SECRET_KEY: ${API_SECRET_KEY}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${API_GATEWAY_PORT:-8000}:8000"
+    networks:
+      - workflow-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # ─────────────────────────────────────────
+  # Trigger Service — webhooks & événements
+  # ─────────────────────────────────────────
+  trigger-service:
+    build:
+      context: ./trigger-service
+      target: runtime
+    container_name: workflow-trigger-service
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      REDIS_EVENTS_QUEUE: ${REDIS_EVENTS_QUEUE:-workflow:events}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${TRIGGER_SERVICE_PORT:-8001}:8001"
+    networks:
+      - workflow-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # ─────────────────────────────────────────
+  # Agent LLM Service — inférence via Ollama
+  # ─────────────────────────────────────────
+  agent-llm-service:
+    build:
+      context: ./agent-llm-service
+      target: runtime
+    container_name: workflow-agent-llm
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME:-agent-llm-inference}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma:2b}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_DEFAULT_TEMPERATURE: ${LLM_DEFAULT_TEMPERATURE:-0.7}
+      LLM_DEFAULT_MAX_TOKENS: ${LLM_DEFAULT_MAX_TOKENS:-1024}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${AGENT_LLM_PORT:-8002}:8002"
+    networks:
+      - workflow-net
+    depends_on:
+      mlflow:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # ─────────────────────────────────────────
+  # Orchestrator Service — worker Redis
+  # ─────────────────────────────────────────
+  orchestrator-service:
+    build:
+      context: ./orchestrator-service
+      target: runtime
+    container_name: workflow-orchestrator
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      REDIS_EVENTS_QUEUE: ${REDIS_EVENTS_QUEUE:-workflow:events}
+      AGENT_LLM_URL: http://agent-llm-service:8002
+      ORCHESTRATOR_CONCURRENCY: ${ORCHESTRATOR_CONCURRENCY:-4}
+      HEALTH_PORT: ${ORCHESTRATOR_PORT:-8003}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${ORCHESTRATOR_PORT:-8003}:8003"
+    networks:
+      - workflow-net
+    depends_on:
+      redis:
+        condition: service_healthy
+      agent-llm-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # ─────────────────────────────────────────
+  # Frontend — React / Vite (dev server)
+  # ─────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    container_name: workflow-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    networks:
+      - workflow-net
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
